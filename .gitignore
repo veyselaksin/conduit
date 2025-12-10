@@ -1,0 +1,47 @@
+# .gitignore for CipherWall VPN Server
+
+# Binaries
+cipherwall-server
+cipherwall
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Log files
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# Environment files (if you add config loading)
+.env
+.env.local
+config.local.yaml
+secrets.yaml
+
+# Build artifacts
+dist/
+build/

@@ -1,0 +1,37 @@
+# CipherWall VPN - Dockerfile for Dokploy
+# This version is optimized for Dokploy deployment
+
+FROM golang:1.21-alpine AS builder
+
+RUN apk add --no-cache git build-base linux-headers
+
+WORKDIR /build
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY main.go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o cipherwall-server main.go
+
+FROM alpine:latest
+
+RUN apk add --no-cache \
+    iptables \
+    iproute2 \
+    ca-certificates \
+    bash
+
+WORKDIR /app
+
+COPY --from=builder /build/cipherwall-server .
+COPY setup-server.sh .
+
+RUN chmod +x cipherwall-server setup-server.sh
+
+# Create entrypoint that runs setup and server
+RUN printf '#!/bin/bash\nset -e\necho "🛡️ CipherWall VPN - Dokploy"\n./setup-server.sh\nexec ./cipherwall-server\n' > /app/start.sh && \
+    chmod +x /app/start.sh
+
+EXPOSE 1194/udp
+
+ENTRYPOINT ["/app/start.sh"]

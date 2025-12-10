@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  cipherwall-vpn:
+    build: .
+    container_name: cipherwall-server
+    restart: unless-stopped
+    
+    # Network mode host is required for VPN functionality
+    network_mode: host
+    
+    # Privileged mode required for TUN device and iptables
+    privileged: true
+    
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    
+    environment:
+      - TZ=Europe/Rome  # Set to Italy timezone
+    
+    # Optional: Mount logs
+    volumes:
+      - ./logs:/app/logs
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "pgrep", "cipherwall-server"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# For logging
+volumes:
+  logs:
