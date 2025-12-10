@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"github.com/songgao/water"
@@ -25,7 +26,7 @@ import (
 
 const (
 	// MUST be 32 bytes for AES-256
-	PSK         = "this-is-a-strong-32byte-secret" // Exactly 32 bytes - MUST match server
+	PSK         = "this-is-strong-32byte-secret-key" // Exactly 32 bytes - MUST match server
 	CLIENT_IP   = "10.8.0.2/24"
 	BUFFER_SIZE = 1500
 	KEY_LEN     = 32            // For AES-256
@@ -150,14 +151,22 @@ func setupTUN() (*water.Interface, error) {
 	ifaceName := iface.Name()
 	log.Printf("📝 TUN interface created: %s", ifaceName)
 
-	// Configure IP address
-	if err := executeCommand("ip", "addr", "add", CLIENT_IP, "dev", ifaceName); err != nil {
-		return nil, fmt.Errorf("failed to assign IP to TUN interface: %w", err)
-	}
+	// Configure IP address based on OS
+	if runtime.GOOS == "darwin" {
+		// macOS uses ifconfig
+		if err := executeCommand("ifconfig", ifaceName, "10.8.0.2", "10.8.0.1", "up"); err != nil {
+			return nil, fmt.Errorf("failed to configure TUN interface: %w", err)
+		}
+	} else {
+		// Linux uses ip command
+		if err := executeCommand("ip", "addr", "add", CLIENT_IP, "dev", ifaceName); err != nil {
+			return nil, fmt.Errorf("failed to assign IP to TUN interface: %w", err)
+		}
 
-	// Bring interface up
-	if err := executeCommand("ip", "link", "set", "dev", ifaceName, "up"); err != nil {
-		return nil, fmt.Errorf("failed to bring up TUN interface: %w", err)
+		// Bring interface up
+		if err := executeCommand("ip", "link", "set", "dev", ifaceName, "up"); err != nil {
+			return nil, fmt.Errorf("failed to bring up TUN interface: %w", err)
+		}
 	}
 
 	return iface, nil
@@ -171,27 +180,78 @@ func setupRouting(serverAddr string) error {
 		return fmt.Errorf("failed to parse server address: %w", err)
 	}
 
-	// Get default gateway
-	cmd := exec.Command("ip", "route", "show", "default")
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to get default gateway: %w", err)
-	}
+	if runtime.GOOS == "darwin" {
+		// macOS routing setup
+		// Get default gateway
+		cmd := exec.Command("route", "-n", "get", "default")
+		output, err := cmd.Output()
+		if err != nil {
+			return fmt.Errorf("failed to get default gateway: %w", err)
+		}
 
-	log.Printf("📋 Current default route: %s", string(output))
+		log.Printf("📋 Current default route: %s", string(output))
 
-	// Add route to VPN server through existing gateway to avoid routing loop
-	if err := executeCommand("ip", "route", "add", host+"/32", "via", "default"); err != nil {
-		log.Printf("⚠️  Failed to add server route (may already exist): %v", err)
-	}
+		// Get the active network interface (en0 or en1)
+		activeInterface := "en1" // Your system uses en1 based on the route output
 
-	// Add default route through VPN
-	if err := executeCommand("ip", "route", "add", "0.0.0.0/1", "dev", iface.Name()); err != nil {
-		return fmt.Errorf("failed to add VPN route: %w", err)
-	}
+		// Add specific route to VPN server through existing gateway
+		// This must be done BEFORE changing default routes
+		if err := executeCommand("route", "add", "-host", host, "-gateway", "192.168.1.1"); err != nil {
+			log.Printf("⚠️  Warning: Failed to add server route: %v", err)
+			// Try alternative method
+			if err := executeCommand("route", "add", "-host", host, "-interface", activeInterface); err != nil {
+				log.Printf("⚠️  Warning: Alternative server route also failed: %v", err)
+			}
+		}
 
-	if err := executeCommand("ip", "route", "add", "128.0.0.0/1", "dev", iface.Name()); err != nil {
-		return fmt.Errorf("failed to add VPN route: %w", err)
+		// Delete existing default route temporarily and add VPN as default
+		// First, save the original gateway
+		originalGateway := "192.168.1.1"
+
+		// Delete old default route
+		if err := executeCommand("route", "delete", "default"); err != nil {
+			log.Printf("⚠️  Warning: Failed to delete default route: %v", err)
+		}
+
+		// Add new default route through VPN
+		if err := executeCommand("route", "add", "default", "-interface", iface.Name()); err != nil {
+			return fmt.Errorf("failed to add VPN default route: %w", err)
+		}
+
+		// Also add the /1 routes as backup
+		if err := executeCommand("route", "add", "-net", "0.0.0.0/1", "-interface", iface.Name()); err != nil {
+			log.Printf("⚠️  Warning: Failed to add 0/1 route: %v", err)
+		}
+
+		if err := executeCommand("route", "add", "-net", "128.0.0.0/1", "-interface", iface.Name()); err != nil {
+			log.Printf("⚠️  Warning: Failed to add 128/1 route: %v", err)
+		}
+
+		_ = originalGateway // Will use for cleanup
+	} else {
+		// Linux routing setup
+		// Get default gateway
+		cmd := exec.Command("ip", "route", "show", "default")
+		output, err := cmd.Output()
+		if err != nil {
+			return fmt.Errorf("failed to get default gateway: %w", err)
+		}
+
+		log.Printf("📋 Current default route: %s", string(output))
+
+		// Add route to VPN server through existing gateway to avoid routing loop
+		if err := executeCommand("ip", "route", "add", host+"/32", "via", "default"); err != nil {
+			log.Printf("⚠️  Failed to add server route (may already exist): %v", err)
+		}
+
+		// Add default route through VPN
+		if err := executeCommand("ip", "route", "add", "0.0.0.0/1", "dev", iface.Name()); err != nil {
+			return fmt.Errorf("failed to add VPN route: %w", err)
+		}
+
+		if err := executeCommand("ip", "route", "add", "128.0.0.0/1", "dev", iface.Name()); err != nil {
+			return fmt.Errorf("failed to add VPN route: %w", err)
+		}
 	}
 
 	return nil
@@ -200,11 +260,30 @@ func setupRouting(serverAddr string) error {
 // cleanupRouting removes VPN routes
 func cleanupRouting(serverAddr string) {
 	log.Println("🧹 Cleaning up routes...")
-	executeCommand("ip", "route", "del", "0.0.0.0/1")
-	executeCommand("ip", "route", "del", "128.0.0.0/1")
 
-	host, _, _ := net.SplitHostPort(serverAddr)
-	executeCommand("ip", "route", "del", host+"/32")
+	if runtime.GOOS == "darwin" {
+		// macOS cleanup
+		// Delete VPN default route
+		executeCommand("route", "delete", "default")
+
+		// Delete backup routes
+		executeCommand("route", "delete", "-net", "0.0.0.0/1")
+		executeCommand("route", "delete", "-net", "128.0.0.0/1")
+
+		// Delete server-specific route
+		host, _, _ := net.SplitHostPort(serverAddr)
+		executeCommand("route", "delete", "-host", host)
+
+		// Restore original default route
+		executeCommand("route", "add", "default", "192.168.1.1")
+	} else {
+		// Linux cleanup
+		executeCommand("ip", "route", "del", "0.0.0.0/1")
+		executeCommand("ip", "route", "del", "128.0.0.0/1")
+
+		host, _, _ := net.SplitHostPort(serverAddr)
+		executeCommand("ip", "route", "del", host+"/32")
+	}
 }
 
 // handleIncomingPackets reads from UDP and writes to TUN after decrypting/authenticating
