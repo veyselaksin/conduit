@@ -21,8 +21,6 @@ import (
 )
 
 const (
-	// MUST be 32 bytes for AES-256
-	PSK         = "this-is-a-strong-32byte-secret" // Exactly 32 bytes
 	SERVER_IP   = "10.8.0.1/24"
 	UDP_PORT    = 1194
 	BUFFER_SIZE = 1500
@@ -46,12 +44,19 @@ var (
 func main() {
 	log.Println("🛡️  CipherWall VPN Server Starting...")
 
-	// 1. Derive Keys
+	// 1. Get PSK from environment or use default
+	psk := os.Getenv("VPN_PSK")
+	if psk == "" {
+		psk = "this-is-strong-32byte-secret-key"
+		log.Println("⚠️  Using default PSK. Set VPN_PSK environment variable for production!")
+	}
+
+	// 2. Derive Keys
 	log.Println("📦 Deriving encryption and authentication keys from PSK...")
-	deriveKeys([]byte(PSK))
+	deriveKeys([]byte(psk))
 	log.Printf("✅ Keys derived successfully (AES: %d bytes, HMAC: %d bytes)", len(aesKey), len(hmacKey))
 
-	// 2. Setup TUN Interface
+	// 3. Setup TUN Interface
 	log.Println("🌐 Setting up TUN interface...")
 	var err error
 	iface, err = setupTUN()
@@ -60,7 +65,7 @@ func main() {
 	}
 	log.Printf("✅ TUN interface '%s' created and configured with IP %s", iface.Name(), SERVER_IP)
 
-	// 3. Setup UDP Listener
+	// 4. Setup UDP Listener
 	log.Printf("🔌 Starting UDP listener on port %d...", UDP_PORT)
 	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", UDP_PORT))
 	if err != nil {
@@ -74,10 +79,10 @@ func main() {
 	defer conn.Close()
 	log.Printf("✅ UDP listener started successfully on 0.0.0.0:%d", UDP_PORT)
 
-	// 4. Initialize client tracking
+	// 5. Initialize client tracking
 	clientAddrs = make(map[string]*net.UDPAddr)
 
-	// 5. Start Packet Handlers (bidirectional)
+	// 6. Start Packet Handlers (bidirectional)
 	log.Println("🚀 Starting packet handlers...")
 	go handleIncomingPackets(conn) // UDP -> TUN
 	go handleOutgoingPackets(conn) // TUN -> UDP

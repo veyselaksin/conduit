@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   cipherwall-vpn:
     build: .
@@ -21,6 +19,7 @@ services:
     
     environment:
       - TZ=Europe/Rome  # Set to Italy timezone
+      - VPN_PSK=${VPN_PSK:-this-is-strong-32byte-secret-key}
     
     # Optional: Mount logs
     volumes:
